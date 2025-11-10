@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Space Runner</title>
+<style>
+html,body{height:100%;margin:0;background:#0b0f1a;color:#e6eef8;font-family:system-ui,Segoe UI,Helvetica,Arial}
+#gameWrap{display:flex;align-items:center;justify-content:center;height:100%}
+canvas{background:#0b1220;border:6px solid #0f1724;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+#ui{position:fixed;left:20px;top:20px;user-select:none}
+#ui h1{margin:0 0 10px 0;font-size:16px}
+#ui p{margin:6px 0;font-size:13px}
+#footer{position:fixed;right:20px;bottom:20px;font-size:12px;opacity:.8}
+.btn{background:#142033;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.04);cursor:pointer;color:#d8e9ff}
+</style>
+</head>
+<body>
+<div id="gameWrap">
+<canvas id="c" width="900" height="540"></canvas>
+</div>
+<div id="ui">
+<h1>Space Runner</h1>
+<p>Score: <span id="score">0</span></p>
+<p>Best: <span id="best">0</span></p>
+<p>Controls: ← → to move, Space to jump, G to flip gravity</p>
+<p><button id="restart" class="btn">Restart</button></p>
+</div>
+<div id="footer">Single-file HTML + JavaScript. Open in a browser to play.</div>
+<script>
+// Service worker for offline support
+if('serviceWorker' in navigator){
+ navigator.serviceWorker.register(URL.createObjectURL(new Blob([
+`self.addEventListener('install', e=>{e.waitUntil(caches.open('space-runner-cache-v1').then(c=>c.addAll(['index.html'])))})
+self.addEventListener('fetch', e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))})`
+],{type:'text/javascript'}));
+}
+
+// --- Begin Space Runner Game JS ---
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  let running = true, score = 0;
+  let best = Number(localStorage.getItem('space_runner_best') || 0);
+  document.getElementById('best').textContent = best;
+
+  const player = {x:140, y:H/2, w:28, h:28, vx:0, vy:0, speed:3.2, jumpPower:8.5, onGround:false, gravity:0.45, gravityDir:1};
+  const platforms = [];
+  const platformSpeed = 2.6, spawnGap={min:90,max:240}, platformHeight=18;
+  const keys = {};
+
+  window.addEventListener('keydown', e=>{keys[e.key.toLowerCase()]=true; if(e.code==='Space') e.preventDefault();});
+  window.addEventListener('keyup', e=>{keys[e.key.toLowerCase()]=false;});
+  document.getElementById('restart').addEventListener('click', reset);
+
+  function rand(a,b){return Math.random()*(b-a)+a}
+
+  function spawnInitial(){
+    platforms.length=0;
+    platforms.push({x:0,y:H-120,w:W*1.5,h:platformHeight});
+    let cursor=W*1.2;
+    while(cursor<W*4){
+      const y=rand(80,H-80), w=rand(80,220);
+      platforms.push({x:cursor,y:y,w:w,h:platformHeight});
+      cursor+=w+rand(spawnGap.min,spawnGap.max);
+    }
+  }
+
+  function reset(){
+    score=0;document.getElementById('score').textContent=score;
+    player.x=140;player.y=H/2;player.vx=0;player.vy=0;player.gravityDir=1;player.onGround=false;
+    spawnInitial();running=true;
+  }
+
+  function rectsIntersect(a,b){return !(a.x+a.w<b.x||a.x>b.x+b.w||a.y+a.h<b.y||a.y>b.y+b.h);}
+
+  spawnInitial();
+
+  let last = performance.now();
+  function loop(t){
+    const dt = Math.min(40,t-last)/16.666; last=t;
+    if(running) update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  function update(dt){
+    if(keys['arrowleft']||keys['a']) player.vx=-player.speed;
+    else if(keys['arrowright']||keys['d']) player.vx=player.speed;
+    else player.vx=0;
+
+    if((keys[' ']||keys['spacebar']||keys['space'])&&player.onGround){player.vy=-player.jumpPower*player.gravityDir;player.onGround=false;}
+    if(keys['g']){if(!keys._gHandled){player.gravityDir*=-1;keys._gHandled=true;}} else keys._gHandled=false;
+
+    player.vy+=player.gravity*player.gravityDir*dt;
+    player.x+=player.vx*dt*60/50;
+    player.y+=player.vy*dt*60/50;
+
+    for(let p of platforms){p.x-=platformSpeed*dt;}
+    if(platforms.length&&platforms[0].x+platforms[0].w<-200) platforms.shift();
+    while(platforms.length&&platforms[platforms.length-1].x+platforms[platforms.length-1].w<W*3){
+      const last=platforms[platforms.length-1];
+      const x=last.x+last.w+rand(spawnGap.min,spawnGap.max), y=rand(60,H-60), w=rand(80,220);
+      platforms.push({x:x,y:y,w:w,h:platformHeight});
+    }
+
+    player.onGround=false;
+    const playerRect={x:player.x,y:player.y,w:player.w,h:player.h};
+    for(let p of platforms){
+      const platRect={x:p.x,y:p.y,w:p.w,h:p.h};
+      if(rectsIntersect(playerRect,platRect)){
+        if(player.gravityDir===1){
+          const prevY=player.y-player.vy*dt*60/50;
+          if(prevY+player.h<=p.y+6){player.y=p.y-player.h;player.vy=0;player.onGround=true;}
+          else{if(player.x<p.x) player.x=p.x-player.w-0.1; else player.x=p.x+p.w+0.1;player.vx=0;}
+        } else{
+          const prevY=player.y-player.vy*dt*60/50;
+          if(prevY>=p.y+p.h-6){player.y=p.y+p.h;player.vy=0;player.onGround=true;}
+          else{if(player.x<p.x) player.x=p.x-player.w-0.1; else player.x=p.x+p.w+0.1;player.vx=0;}
+        }
+      }
+    }
+
+    if(player.y>H+100||player.y<-150){running=false;if(score>best){best=Math.floor(score);localStorage.setItem('space_runner_best',best);document.getElementById('best').textContent=best;}}
+    score+=0.02*dt*60;document.getElementById('score').textContent=Math.floor(score);
+  }
+
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#071026';ctx.fillRect(0,0,W,H);
+    const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#071022');g.addColorStop(1,'#07162a');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+    for(let p of platforms){ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(p.x+3,p.y+6,p.w,p.h);ctx.fillStyle='#9ad3ff';roundRect(ctx,p.x,p.y,p.w,p.h,6,true,false);}
+    ctx.save();if(player.gravityDir===-1){ctx.translate(player.x+player.w/2,player.y+player.h/2);ctx.rotate(Math.PI);ctx.translate(-(player.x+player.w/2),-(player.y+player.h/2));}
+    ctx.fillStyle='#ffd27f';roundRect(ctx,player.x,player.y,player.w,player.h,6,true,false);
+    ctx.fillStyle='#213547';ctx.beginPath();ctx.arc(player.x+player.w*0.65,player.y+player.h*0.35,3,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.06)';ctx.fillRect(player.x+4,player.y+4,player.w-8,player.h-8);
+    ctx.restore();
+    if(!running){ctx.fillStyle='rgba(3,8,15,0.75)';ctx.fillRect(W/2-220,H/2-60,440,120);ctx.fillStyle='#eaf6ff';ctx.font='22px system-ui';ctx.textAlign='center';ctx.fillText('Game Over',W/2,H/2-10);ctx.font='14px system-ui';ctx.fillText('Press Restart to try again',W/2,H/2+22);}
+  }
+
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){if(typeof r==='undefined')r=5;ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();if(fill)ctx.fill();if(stroke)ctx.stroke();}
+  window.addEventListener('blur',()=>running=false);
+})();
+// --- End Space Runner Game JS ---
+</script>
+</body>
+</html>
